@@ -1,7 +1,6 @@
 #[cfg(windows)]
 mod imp {
-    use std::io::{self, Read};
-    use std::process::Command;
+    use std::collections::HashSet;
 
     use windows::core::PCSTR;
     use windows::Win32::Devices::Communication::{
@@ -13,6 +12,8 @@ mod imp {
         CreateFileA, QueryDosDeviceA, ReadFile, WriteFile, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_READ,
         FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     };
+    use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ};
+    use winreg::RegKey;
 
     const SERIAL_MAGIC0: u8 = 0xE5;
     const SERIAL_MAGIC1: u8 = 0x50;
@@ -341,88 +342,79 @@ mod imp {
     }
 
     fn serial_ports_from_pnp() -> Vec<SerialPortEntry> {
-        let output = Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-Command",
-                "Get-CimInstance Win32_SerialPort | ForEach-Object { Write-Output ($_.DeviceID + \"`t\" + $_.PNPDeviceID) }",
-            ])
-            .output();
-        let Ok(output) = output else {
+        let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+        let Ok(usb) = hklm.open_subkey_with_flags(
+            r"SYSTEM\CurrentControlSet\Enum\USB",
+            KEY_READ,
+        ) else {
             return Vec::new();
         };
-        if !output.status.success() {
-            return Vec::new();
+
+        let mut entries = Vec::new();
+        let mut seen_ports = HashSet::new();
+
+        for device_id in usb.enum_keys().filter_map(Result::ok) {
+            let device_upper = device_id.to_ascii_uppercase();
+            if !device_upper.contains("VID_") || !device_upper.contains("PID_") {
+                continue;
+            }
+
+            let Ok(device_key) = usb.open_subkey_with_flags(&device_id, KEY_READ) else {
+                continue;
+            };
+
+            for instance_id in device_key.enum_keys().filter_map(Result::ok) {
+                let Ok(instance_key) = device_key.open_subkey_with_flags(&instance_id, KEY_READ) else {
+                    continue;
+                };
+                let Ok(parameters) = instance_key.open_subkey_with_flags("Device Parameters", KEY_READ) else {
+                    continue;
+                };
+                let Ok(port_name) = parameters.get_value::<String, _>("PortName") else {
+                    continue;
+                };
+                if !port_name.to_ascii_uppercase().starts_with("COM")
+                    || !serial_port_exists(&port_name)
+                    || !seen_ports.insert(port_name.clone())
+                {
+                    continue;
+                }
+
+                entries.push(SerialPortEntry {
+                    device_key: format!(r"USB\{device_id}\{instance_id}"),
+                    port_name,
+                });
+            }
         }
 
-        let mut bytes = output.stdout;
-        bytes.extend_from_slice(&output.stderr);
-        let text = decode_command_output(&bytes);
-        text.lines()
-            .filter_map(parse_pnp_serial_line)
-            .collect()
-    }
-
-    fn parse_pnp_serial_line(line: &str) -> Option<SerialPortEntry> {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            return None;
-        }
-
-        let mut parts = trimmed.splitn(2, '\t');
-        let port_name = parts.next()?.trim().to_string();
-        let device_key = parts.next()?.trim().to_string();
-        if !port_name.to_ascii_uppercase().starts_with("COM") || device_key.is_empty() {
-            return None;
-        }
-
-        Some(SerialPortEntry {
-            device_key,
-            port_name,
-        })
+        entries
     }
 
     fn serial_ports_from_registry() -> Vec<SerialPortEntry> {
-        let output = Command::new("reg")
-            .args(["query", r"HKLM\HARDWARE\DEVICEMAP\SERIALCOMM"])
-            .output();
-        let Ok(output) = output else {
+        let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+        let Ok(serialcomm) = hklm.open_subkey_with_flags(
+            r"HARDWARE\DEVICEMAP\SERIALCOMM",
+            KEY_READ,
+        ) else {
             return Vec::new();
         };
-        if !output.status.success() {
-            return Vec::new();
-        }
 
-        let mut bytes = output.stdout;
-        bytes.extend_from_slice(&output.stderr);
-        let text = decode_command_output(&bytes);
-        text.lines()
-            .filter_map(parse_serial_registry_line)
+        serialcomm
+            .enum_values()
+            .filter_map(Result::ok)
+            .filter_map(|(device_key, _)| {
+                let port_name = serialcomm.get_value::<String, _>(&device_key).ok()?;
+                if !port_name.to_ascii_uppercase().starts_with("COM")
+                    || !serial_port_exists(&port_name)
+                {
+                    return None;
+                }
+                Some(SerialPortEntry {
+                    device_key,
+                    port_name,
+                })
+            })
             .collect()
-    }
-
-    fn parse_serial_registry_line(line: &str) -> Option<SerialPortEntry> {
-        let trimmed = line.trim();
-        if !trimmed.contains("REG_SZ") {
-            return None;
-        }
-
-        let columns = trimmed
-            .split_whitespace()
-            .map(str::trim)
-            .filter(|part| !part.is_empty())
-            .collect::<Vec<_>>();
-        let reg_index = columns.iter().position(|part| *part == "REG_SZ")?;
-        let device_key = columns.get(..reg_index)?.join(" ");
-        let port_name = columns.get(reg_index + 1)?.to_string();
-        if !port_name.to_ascii_uppercase().starts_with("COM") {
-            return None;
-        }
-
-        Some(SerialPortEntry {
-            device_key,
-            port_name,
-        })
     }
 
     fn serial_entry_has_key(
@@ -469,18 +461,6 @@ mod imp {
         }
     }
 
-    fn decode_command_output(bytes: &[u8]) -> String {
-        String::from_utf8(bytes.to_vec())
-            .or_else(|_| read_to_string_lossy(bytes))
-            .unwrap_or_default()
-    }
-
-    fn read_to_string_lossy(bytes: &[u8]) -> io::Result<String> {
-        let mut cursor = io::Cursor::new(bytes);
-        let mut raw = Vec::new();
-        cursor.read_to_end(&mut raw)?;
-        Ok(raw.iter().map(|byte| *byte as char).collect())
-    }
 }
 
 #[cfg(windows)]
