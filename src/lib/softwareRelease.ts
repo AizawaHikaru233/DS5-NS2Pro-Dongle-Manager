@@ -1,0 +1,380 @@
+import { invoke } from "@tauri-apps/api/core";
+import { APP_METADATA } from "../appConfig";
+
+const UNKNOWN_VERSION = "--";
+const SOFTWARE_UPDATE_CACHE_PREFIX = "software-update-cache:";
+const SOFTWARE_UPDATE_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const SOFTWARE_UPDATE_TIMEOUT_MS = import.meta.env.DEV ? 30_000 : 15_000;
+
+export interface SoftwareReleaseAsset {
+  name: string;
+  downloadUrl: string;
+}
+
+export interface SoftwareLocalizedBlock {
+  title: string;
+  summary: string;
+  highlights: string[];
+  upgradeNotice: string;
+}
+
+export interface SoftwareLocalizedNotes {
+  zh_CN: SoftwareLocalizedBlock;
+  en_US: SoftwareLocalizedBlock;
+  aiGenerated?: boolean;
+}
+
+export interface SoftwareReleaseInfo {
+  tagName: string;
+  name: string;
+  body: string;
+  htmlUrl: string;
+  publishedAt: string | null;
+  commitSha: string | null;
+  assets: SoftwareReleaseAsset[];
+  localizedNotes?: SoftwareLocalizedNotes;
+}
+
+export interface SoftwareUpdateCheckResult {
+  updateAvailable: boolean;
+  currentVersion: string;
+  currentRelease: SoftwareReleaseInfo | null;
+  latestRelease: SoftwareReleaseInfo;
+}
+
+export interface SoftwareSystemInfo {
+  os: "windows" | "macos" | "linux" | string;
+  arch: "x86_64" | "aarch64" | string;
+}
+
+export interface RecommendedSoftwareAsset extends SoftwareReleaseAsset {
+  priority: number;
+  kind: string;
+}
+
+interface GitHubReleaseAsset {
+  name?: string;
+  browser_download_url?: string;
+}
+
+interface GitHubRelease {
+  tag_name?: string;
+  name?: string;
+  body?: string;
+  html_url?: string;
+  published_at?: string | null;
+  target_commitish?: string | null;
+  assets?: GitHubReleaseAsset[];
+}
+
+export async function checkSoftwareUpdate(signal?: AbortSignal): Promise<SoftwareUpdateCheckResult | null> {
+  const currentVersion = normalizeSoftwareVersion(APP_METADATA.version);
+
+  if (!shouldCheckSoftwareUpdate(currentVersion)) {
+    return null;
+  }
+
+  const cachedResult = readCachedSoftwareUpdate(currentVersion);
+
+  if (cachedResult) {
+    void refreshSoftwareUpdateCache(currentVersion);
+    return cachedResult;
+  }
+
+  return fetchSoftwareUpdate(currentVersion, signal);
+}
+
+export function shouldCheckSoftwareUpdate(currentVersion = APP_METADATA.version): boolean {
+  return Boolean(
+    typeof window !== "undefined" &&
+      navigator.onLine &&
+      currentVersion &&
+      currentVersion.trim() !== "" &&
+      currentVersion.trim() !== UNKNOWN_VERSION &&
+      APP_METADATA.softwareUpdateApiUrl.trim() !== "",
+  );
+}
+
+export async function getSoftwareSystemInfo(): Promise<SoftwareSystemInfo> {
+  try {
+    return await invoke<SoftwareSystemInfo>("ds5_get_system_info");
+  } catch {
+    return inferBrowserSystemInfo();
+  }
+}
+
+export function selectRecommendedSoftwareAssets(
+  assets: SoftwareReleaseAsset[],
+  systemInfo: SoftwareSystemInfo | null,
+): RecommendedSoftwareAsset[] {
+  if (!Array.isArray(assets) || assets.length === 0) {
+    return [];
+  }
+
+  const scored = assets
+    .map((asset) => scoreSoftwareAsset(asset, systemInfo))
+    .filter((asset): asset is RecommendedSoftwareAsset => asset.priority > 0)
+    .sort((a, b) => b.priority - a.priority || a.name.localeCompare(b.name));
+
+  return scored.length > 0 ? scored : assets.map((asset) => ({ ...asset, priority: 1, kind: "package" }));
+}
+
+function softwareUpdateUrl(currentVersion: string): string {
+  const url = new URL(APP_METADATA.softwareUpdateApiUrl);
+  url.searchParams.set("currentVersion", currentVersion);
+  return url.toString();
+}
+
+async function fetchSoftwareUpdate(currentVersion: string, signal?: AbortSignal): Promise<SoftwareUpdateCheckResult> {
+  const result = normalizeSoftwareUpdateResult(
+    await fetchJson<Partial<SoftwareUpdateCheckResult> | GitHubRelease>(softwareUpdateUrl(currentVersion), mergeWithTimeout(signal)),
+    currentVersion,
+  );
+  writeCachedSoftwareUpdate(currentVersion, result);
+  return result;
+}
+
+function refreshSoftwareUpdateCache(currentVersion: string): void {
+  if (!navigator.onLine) {
+    return;
+  }
+
+  void fetchSoftwareUpdate(currentVersion).catch((error) => {
+    console.debug("Software update cache refresh failed", error);
+  });
+}
+
+async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
+  const response = await fetch(url, {
+    headers: {
+      Accept: "application/json",
+    },
+    signal,
+  });
+
+  if (!response.ok) {
+    throw new Error(`Software update check failed: ${response.status}`);
+  }
+
+  return response.json() as Promise<T>;
+}
+
+function scoreSoftwareAsset(asset: SoftwareReleaseAsset, systemInfo: SoftwareSystemInfo | null): RecommendedSoftwareAsset {
+  const name = String(asset.name || "").toLowerCase();
+  const os = systemInfo?.os ?? inferBrowserSystemInfo().os;
+  const arch = systemInfo?.arch ?? inferBrowserSystemInfo().arch;
+  let priority = 0;
+  let kind = "package";
+
+  if (!name || !asset.downloadUrl) {
+    return { ...asset, name: asset.name || UNKNOWN_VERSION, downloadUrl: asset.downloadUrl || "", priority, kind };
+  }
+
+  if (os === "windows" && /\.(msi|exe)$/.test(name)) {
+    priority = name.endsWith(".msi") ? 90 : 80;
+    kind = name.endsWith(".msi") ? "msi" : "setup";
+  } else if (os === "macos" && /\.(dmg|app\.tar\.gz)$/.test(name)) {
+    priority = name.endsWith(".dmg") ? 90 : 70;
+    kind = name.endsWith(".dmg") ? "dmg" : "app archive";
+  } else if (os === "linux" && /\.(appimage|deb|rpm)$/.test(name)) {
+    priority = name.endsWith(".appimage") ? 90 : name.endsWith(".deb") ? 80 : 70;
+    kind = name.endsWith(".appimage") ? "appimage" : name.endsWith(".deb") ? "deb" : "rpm";
+  }
+
+  if (priority > 0 && isAssetArchitectureMatch(name, arch)) {
+    priority += 10;
+  }
+
+  return { ...asset, priority, kind };
+}
+
+function isAssetArchitectureMatch(name: string, arch: string): boolean {
+  if (arch === "aarch64" || arch === "arm64") {
+    return name.includes("aarch64") || name.includes("arm64");
+  }
+
+  if (arch === "x86_64" || arch === "x64" || arch === "amd64") {
+    return name.includes("x64") || name.includes("x86_64") || name.includes("amd64");
+  }
+
+  return false;
+}
+
+function inferBrowserSystemInfo(): SoftwareSystemInfo {
+  const platform = navigator.platform.toLowerCase();
+  const userAgent = navigator.userAgent.toLowerCase();
+
+  if (platform.includes("win") || userAgent.includes("windows")) {
+    return { os: "windows", arch: "x86_64" };
+  }
+
+  if (platform.includes("mac") || userAgent.includes("mac os")) {
+    return { os: "macos", arch: userAgent.includes("arm") ? "aarch64" : "x86_64" };
+  }
+
+  return { os: "linux", arch: userAgent.includes("aarch64") || userAgent.includes("arm64") ? "aarch64" : "x86_64" };
+}
+
+function normalizeSoftwareVersion(version: string): string {
+  const normalized = version.trim();
+
+  const semanticMatch = normalized.match(/^v?(\d+\.\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.-]+)?)$/i);
+  if (semanticMatch) {
+    return `v${semanticMatch[1]}`;
+  }
+
+  return normalized;
+}
+
+function normalizeSoftwareUpdateResult(result: Partial<SoftwareUpdateCheckResult> | GitHubRelease, currentVersion: string): SoftwareUpdateCheckResult {
+  if (isGitHubRelease(result)) {
+    const latestRelease = normalizeGitHubSoftwareRelease(result);
+    return {
+      updateAvailable: compareSoftwareVersions(latestRelease.tagName, currentVersion) > 0,
+      currentVersion,
+      currentRelease: null,
+      latestRelease,
+    };
+  }
+
+  if (!result.latestRelease?.tagName) {
+    throw new Error("Software update check failed: invalid latest release payload");
+  }
+
+  const latestRelease = normalizeSoftwareReleaseInfo(result.latestRelease);
+  const normalizedCurrentVersion = normalizeSoftwareVersion(result.currentVersion || currentVersion);
+  const updateAvailable = result.updateAvailable ?? compareSoftwareVersions(latestRelease.tagName, normalizedCurrentVersion) > 0;
+
+  return {
+    updateAvailable,
+    currentVersion: normalizedCurrentVersion,
+    currentRelease: result.currentRelease ? normalizeSoftwareReleaseInfo(result.currentRelease) : null,
+    latestRelease,
+  };
+}
+
+function isGitHubRelease(result: Partial<SoftwareUpdateCheckResult> | GitHubRelease): result is GitHubRelease {
+  return Boolean((result as GitHubRelease).tag_name || (result as GitHubRelease).html_url);
+}
+
+function normalizeGitHubSoftwareRelease(release: GitHubRelease): SoftwareReleaseInfo {
+  return {
+    tagName: normalizeSoftwareVersion(String(release.tag_name || UNKNOWN_VERSION)),
+    name: String(release.name || release.tag_name || UNKNOWN_VERSION),
+    body: String(release.body || ""),
+    htmlUrl: String(release.html_url || APP_METADATA.githubUrl),
+    publishedAt: typeof release.published_at === "string" ? release.published_at : null,
+    commitSha: typeof release.target_commitish === "string" ? release.target_commitish : null,
+    assets: Array.isArray(release.assets)
+      ? release.assets
+        .filter((asset): asset is Required<GitHubReleaseAsset> => Boolean(asset?.name && asset?.browser_download_url))
+        .map((asset) => ({ name: String(asset.name), downloadUrl: String(asset.browser_download_url) }))
+      : [],
+  };
+}
+
+function normalizeSoftwareReleaseInfo(release: Partial<SoftwareReleaseInfo>): SoftwareReleaseInfo {
+  return {
+    tagName: normalizeSoftwareVersion(String(release.tagName || UNKNOWN_VERSION)),
+    name: String(release.name || release.tagName || UNKNOWN_VERSION),
+    body: String(release.body || ""),
+    htmlUrl: String(release.htmlUrl || APP_METADATA.githubUrl),
+    publishedAt: typeof release.publishedAt === "string" ? release.publishedAt : null,
+    commitSha: typeof release.commitSha === "string" ? release.commitSha : null,
+    assets: Array.isArray(release.assets)
+      ? release.assets
+        .filter((asset): asset is SoftwareReleaseAsset => Boolean(asset?.name && asset?.downloadUrl))
+        .map((asset) => ({ name: String(asset.name), downloadUrl: String(asset.downloadUrl) }))
+      : [],
+    localizedNotes: normalizeSoftwareLocalizedNotes(release.localizedNotes),
+  };
+}
+
+function normalizeSoftwareLocalizedNotes(notes: SoftwareLocalizedNotes | undefined): SoftwareLocalizedNotes | undefined {
+  if (!notes?.zh_CN && !notes?.en_US) {
+    return undefined;
+  }
+
+  return {
+    zh_CN: normalizeSoftwareLocalizedBlock(notes.zh_CN),
+    en_US: normalizeSoftwareLocalizedBlock(notes.en_US),
+    aiGenerated: notes.aiGenerated,
+  };
+}
+
+function normalizeSoftwareLocalizedBlock(block: SoftwareLocalizedBlock | undefined): SoftwareLocalizedBlock {
+  return {
+    title: String(block?.title || ""),
+    summary: String(block?.summary || ""),
+    highlights: Array.isArray(block?.highlights) ? block.highlights.map(String).filter(Boolean) : [],
+    upgradeNotice: String(block?.upgradeNotice || ""),
+  };
+}
+
+function compareSoftwareVersions(left: string, right: string): number {
+  const leftParts = parseSoftwareVersionParts(left);
+  const rightParts = parseSoftwareVersionParts(right);
+
+  for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index += 1) {
+    const difference = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
+    if (difference !== 0) {
+      return difference;
+    }
+  }
+
+  return 0;
+}
+
+function parseSoftwareVersionParts(version: string): number[] {
+  const match = version.trim().match(/^v?(\d+(?:\.\d+){0,3})/i);
+  return match ? match[1].split(".").map((part) => Number(part) || 0) : [0];
+}
+
+function cacheKey(currentVersion: string): string {
+  return `${SOFTWARE_UPDATE_CACHE_PREFIX}${currentVersion}`;
+}
+
+function readCachedSoftwareUpdate(currentVersion: string): SoftwareUpdateCheckResult | null {
+  try {
+    const raw = localStorage.getItem(cacheKey(currentVersion));
+
+    if (!raw) {
+      return null;
+    }
+
+    const cached = JSON.parse(raw) as { savedAt?: number; result?: SoftwareUpdateCheckResult };
+
+    if (!cached.savedAt || !cached.result || Date.now() - cached.savedAt > SOFTWARE_UPDATE_CACHE_TTL_MS) {
+      localStorage.removeItem(cacheKey(currentVersion));
+      return null;
+    }
+
+    return cached.result;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedSoftwareUpdate(currentVersion: string, result: SoftwareUpdateCheckResult): void {
+  try {
+    localStorage.setItem(cacheKey(currentVersion), JSON.stringify({ savedAt: Date.now(), result }));
+  } catch {
+    // Ignore storage quota or private-mode failures; the live response is still usable.
+  }
+}
+
+function mergeWithTimeout(signal?: AbortSignal): AbortSignal {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), SOFTWARE_UPDATE_TIMEOUT_MS);
+
+  if (signal) {
+    if (signal.aborted) {
+      controller.abort();
+    } else {
+      signal.addEventListener("abort", () => controller.abort(), { once: true });
+    }
+  }
+
+  controller.signal.addEventListener("abort", () => window.clearTimeout(timeoutId), { once: true });
+  return controller.signal;
+}
