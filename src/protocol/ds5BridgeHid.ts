@@ -6,6 +6,19 @@ import {
   decodeConfigBody,
   encodeConfigBody,
 } from "./config";
+import {
+  CMD_SAVE_BUTTON_MAPPING,
+  CMD_UPDATE_DS5_BUTTON_MAPPING,
+  CMD_UPDATE_NS2PRO_BUTTON_MAPPING,
+  DS5_MAPPING_REPORT_ID,
+  NS2PRO_MAPPING_REPORT_ID,
+  decodeDs5ButtonMapping,
+  decodeNs2ProButtonMapping,
+  encodeDs5ButtonMapping,
+  encodeNs2ProButtonMapping,
+  type Ds5ButtonMapping,
+  type Ns2ProButtonMapping,
+} from "./buttonMapping";
 
 export const SONY_VENDOR_ID = 0x054c;
 export const DUALSENSE_PRODUCT_ID = 0x0ce6;
@@ -222,6 +235,32 @@ export class Ds5BridgeHidClient {
     await this.tauriDevice.sendFeatureReport(REPORT_SET_CONFIG, report);
   }
 
+  async readDs5ButtonMapping(): Promise<Ds5ButtonMapping> {
+    await this.open();
+    const report = await this.tauriDevice.receiveFeatureReport(DS5_MAPPING_REPORT_ID);
+    return decodeDs5ButtonMapping(report);
+  }
+
+  async readNs2ProButtonMapping(): Promise<Ns2ProButtonMapping> {
+    await this.open();
+    const report = await this.tauriDevice.receiveFeatureReport(NS2PRO_MAPPING_REPORT_ID);
+    return decodeNs2ProButtonMapping(report);
+  }
+
+  async applyDs5ButtonMapping(mapping: Ds5ButtonMapping): Promise<void> {
+    await this.open();
+    const report = commandReport(CMD_UPDATE_DS5_BUTTON_MAPPING);
+    report.set(encodeDs5ButtonMapping(mapping), 1);
+    await this.tauriDevice.sendFeatureReport(REPORT_SET_CONFIG, report);
+  }
+
+  async applyNs2ProButtonMapping(mapping: Ns2ProButtonMapping): Promise<void> {
+    await this.open();
+    const report = commandReport(CMD_UPDATE_NS2PRO_BUTTON_MAPPING);
+    report.set(encodeNs2ProButtonMapping(mapping), 1);
+    await this.tauriDevice.sendFeatureReport(REPORT_SET_CONFIG, report);
+  }
+
   async readFirmwareVersion(): Promise<string> {
     await this.open();
     const report = await this.tauriDevice.receiveFeatureReport(REPORT_GET_FIRMWARE_VERSION);
@@ -311,6 +350,7 @@ export class Ds5BridgeHidClient {
   async saveToFlash(): Promise<void> {
     await this.open();
     await this.tauriDevice.sendFeatureReport(REPORT_SET_CONFIG, commandReport(CMD_SAVE_TO_FLASH));
+    await this.tauriDevice.sendFeatureReport(REPORT_SET_CONFIG, commandReport(CMD_SAVE_BUTTON_MAPPING));
   }
 
   async reconnectUsb(): Promise<void> {

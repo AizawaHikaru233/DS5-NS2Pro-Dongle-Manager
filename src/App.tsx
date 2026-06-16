@@ -49,7 +49,7 @@ export default function App() {
   const promptedSoftwareUpdateKeyRef = useRef<string | null>(null);
   const isBusy = bridge.operation !== null;
   const headerIssues = useMemo(() => bridge.issues.map((issue) => t(`validation.${issue.field}`)), [bridge.issues, t]);
-  const isSettingsView = view === "settings" || view === "ns2proSettings" || view === "ds5Settings" || view === "about";
+  const isSettingsView = view === "settings" || view === "mappingSettings" || view === "ns2proSettings" || view === "ds5Settings" || view === "about";
   const handleBackHome = useCallback(() => setView("home"), []);
   const handleOpenSettings = useCallback((source?: DeviceInputSource) => {
     const nextSource = source ?? selectedInputSource;
@@ -86,7 +86,7 @@ export default function App() {
   }, [bridge.client, bridge.clearReturnHome, bridge.shouldReturnHomeRef]);
 
   useEffect(() => {
-    if (!bridge.client && (view === "settings" || view === "ns2proSettings" || view === "ds5Settings" || view === "about") && !bridge.shouldReturnHomeRef.current) {
+    if (!bridge.client && (view === "settings" || view === "mappingSettings" || view === "ns2proSettings" || view === "ds5Settings" || view === "about") && !bridge.shouldReturnHomeRef.current) {
       setView("home");
     }
   }, [bridge.client, bridge.shouldReturnHome, view]);

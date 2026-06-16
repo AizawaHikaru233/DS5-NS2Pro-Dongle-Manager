@@ -278,6 +278,7 @@ export const DeviceStrip = memo(function DeviceStrip({
         ) : (
           <EmptyConnectionPanel
             language={i18n.language}
+            picoConnected={Boolean(client)}
             ns2ProPairing={ns2ProPairing}
             ns2proConnected={ns2proConnected}
             ns2proBleState={ns2proBleState}
@@ -292,6 +293,7 @@ export const DeviceStrip = memo(function DeviceStrip({
       {hasCard && (
         <Ns2ProConnectionOptions
           language={i18n.language}
+          picoConnected={Boolean(client)}
           ns2ProPairing={ns2ProPairing}
           ns2proConnected={ns2proConnected}
           ns2proBleState={ns2proBleState}
@@ -310,6 +312,7 @@ export const DeviceStrip = memo(function DeviceStrip({
 
 function EmptyConnectionPanel({
   language,
+  picoConnected,
   ns2ProPairing,
   ns2proConnected,
   ns2proBleState,
@@ -320,6 +323,7 @@ function EmptyConnectionPanel({
   onStartNs2ProBlePairing,
 }: {
   language: string;
+  picoConnected: boolean;
   ns2ProPairing: Ns2ProPairingStatus;
   ns2proConnected: boolean;
   ns2proBleState: Ns2ProBleState;
@@ -353,6 +357,7 @@ function EmptyConnectionPanel({
       </Card>
       <Ns2ProConnectionOptions
         language={language}
+        picoConnected={picoConnected}
         ns2ProPairing={ns2ProPairing}
         ns2proConnected={ns2proConnected}
         ns2proBleState={ns2proBleState}
@@ -368,6 +373,7 @@ function EmptyConnectionPanel({
 
 function Ns2ProConnectionOptions({
   language,
+  picoConnected,
   ns2ProPairing,
   ns2proConnected,
   ns2proBleState,
@@ -378,6 +384,7 @@ function Ns2ProConnectionOptions({
   onStartNs2ProBlePairing,
 }: {
   language: string;
+  picoConnected: boolean;
   ns2ProPairing: Ns2ProPairingStatus;
   ns2proConnected: boolean;
   ns2proBleState: Ns2ProBleState;
@@ -392,18 +399,18 @@ function Ns2ProConnectionOptions({
   const showPicoFoundInsteadOfLocalError = ns2proBleState === "Error" && ns2proBleLastError === 254 && Boolean(ns2ProPairing.picoPath);
   const displayNs2proBleState: Ns2ProBleState = showPicoFoundInsteadOfLocalError ? "Idle" : ns2proBleState;
   const displayNs2proBleLastError = showPicoFoundInsteadOfLocalError ? 0 : ns2proBleLastError;
-  const picoFoundForBle = Boolean(ns2ProPairing.picoPath) || ns2ProPairing.phase === "waiting" || ns2ProPairing.phase === "paired" || ns2proConnected;
+  const picoFoundForBle = picoConnected || Boolean(ns2ProPairing.picoPath);
+  const picoFoundForWired = picoConnected || Boolean(ns2ProPairing.picoPath);
   const wiredAction = ns2ProWiredConnectionAction(ns2ProPairing, ns2ProReady, zh);
   const wiredForwarding = ns2ProPairing.running &&
     ns2ProPairing.waitingReason === "forwarding";
   const bluetoothReady = displayNs2proBleState === "Ready";
   const ds5OrNs2ProActive = ns2ProReady || bluetoothReady;
   const wiredBusy = isBusy || wiredForwarding || bluetoothReady;
-  const wiredHint = ns2ProConnectionHint(ns2ProPairing, zh, true);
   const copy = zh
     ? {
       wiredTitle: "NS2Pro \u6709\u7ebf\u8fde\u63a5",
-      wiredHint,
+      wiredHint: ns2ProConnectionHint(ns2ProPairing, zh, picoFoundForWired),
       wiredAction,
       bluetoothTitle: "NS2Pro \u84dd\u7259\u8fde\u63a5",
       bluetoothHint: ns2ProBleConnectionHint(displayNs2proBleState, displayNs2proBleLastError, picoFoundForBle, zh),
@@ -411,7 +418,7 @@ function Ns2ProConnectionOptions({
     }
     : {
       wiredTitle: "Wired NS2Pro",
-      wiredHint,
+      wiredHint: ns2ProConnectionHint(ns2ProPairing, zh, picoFoundForWired),
       wiredAction,
       bluetoothTitle: "Bluetooth NS2Pro",
       bluetoothHint: ns2ProBleConnectionHint(displayNs2proBleState, displayNs2proBleLastError, picoFoundForBle, zh),

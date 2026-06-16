@@ -1,7 +1,7 @@
 import type { CSSProperties } from "react";
 import packageJson from "../package.json";
 
-export type AppView = "home" | "settings" | "ns2proSettings" | "ds5Settings" | "about";
+export type AppView = "home" | "settings" | "mappingSettings" | "ns2proSettings" | "ds5Settings" | "about";
 
 export const APP_METADATA = {
   version: packageJson.version,

@@ -7,6 +7,7 @@ import {
   type AppView,
 } from "@/appConfig";
 import { ConfigPanel } from "@/components/ConfigPanel";
+import { ButtonMappingPanel } from "@/components/ButtonMappingPanel";
 import { SidebarDeviceCard } from "@/components/SidebarDeviceCard";
 import {
   Sidebar,
@@ -25,6 +26,7 @@ import type { UseDs5BridgeResult } from "@/hooks/useDs5Bridge";
 import type { DeviceInputSource } from "@/components/DeviceStrip";
 
 const GENERAL_NAV_ITEMS = [
+  { icon: Gamepad2, labelKey: "settings.nav.mapping", view: "mappingSettings" },
   { icon: Settings, labelKey: "settings.nav.general", view: "settings" },
   { icon: Info, labelKey: "settings.nav.about", view: "about" },
 ] as const satisfies ReadonlyArray<{
@@ -118,6 +120,8 @@ export function SettingsView({
               page={view === "ns2proSettings" ? "ns2pro" : view === "ds5Settings" ? "ds5" : "general"}
               onProgressComplete={onProgressComplete}
             />
+          ) : view === "mappingSettings" ? (
+            <ButtonMappingPanel bridge={bridge} source={selectedInputSource} />
           ) : (
             <section className="panel about-panel" aria-labelledby="about-title">
               <div className="panel-title about-panel-title">

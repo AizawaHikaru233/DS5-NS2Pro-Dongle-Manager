@@ -497,6 +497,42 @@ pub async fn ds5_restart_ns2pro_pico_bridge(
 }
 
 #[tauri::command]
+pub async fn ds5_restart_ns2pro_pico_bridge_wired(
+    state: State<'_, Ns2ProPicoBridgeState>,
+    options: StartNs2ProPicoBridgeOptions,
+) -> Result<Ns2ProPicoBridgeStatusDto, String> {
+    close_ns2pro_manual_pairing_window(&state);
+    state.running.store(false, Ordering::SeqCst);
+    let wait_started = Instant::now();
+    while state
+        .running
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        if wait_started.elapsed() >= Duration::from_millis(NS2PRO_BRIDGE_RESTART_WAIT_MS) {
+            return ns2pro_pico_bridge_status(&state, true);
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+
+    scan_ns2pro_serial_once(&state.stats);
+    let running = Arc::clone(&state.running);
+    let stats = Arc::clone(&state.stats);
+    let read_timeout_ms = options.read_timeout_ms.unwrap_or(1).clamp(0, 1000);
+    spawn_ns2pro_pico_bridge_thread(
+        running,
+        stats,
+        Arc::clone(&state.manual_pairing_until),
+        false,
+        options.pico_path,
+        options.ns2pro_path,
+        read_timeout_ms,
+    );
+
+    ns2pro_pico_bridge_status(&state, true)
+}
+
+#[tauri::command]
 pub fn ds5_stop_ns2pro_pico_bridge(
     state: State<'_, Ns2ProPicoBridgeState>,
 ) -> Result<Ns2ProPicoBridgeStatusDto, String> {
