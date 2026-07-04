@@ -24,8 +24,10 @@ import {
   getControllerIconSrc,
   getDeviceLabel,
   isAutoConnectCandidate,
+  isDualSenseRuntimeManagementDevice,
   getDeviceKey,
   getDevicePortKey,
+  isPicoManagementDevice,
   startDeviceMonitor,
   tauriDeviceInfosToHidDevices,
   webHidAvailable,
@@ -53,8 +55,8 @@ const DEVICE_DISCOVERY_FALLBACK_INTERVAL_MS = 30_000;
 const PICO_INFO_REFRESH_INTERVAL_MS = 1_000;
 const NS2PRO_PAIRING_STATUS_REFRESH_INTERVAL_MS = 1_000;
 const CONNECTED_DEVICE_MISSING_GRACE_MS = 3_000;
-const NS2PRO_DISCONNECT_GRACE_MS = 2_000;
-const NS2PRO_PAIRING_DISCONNECT_GRACE_MS = 5_000;
+const NS2PRO_DISCONNECT_GRACE_MS = 0;
+const NS2PRO_PAIRING_DISCONNECT_GRACE_MS = 0;
 const CONTROLLER_CONNECTION_NOTIFICATION_STABLE_MS = 900;
 const BATTERY_LISTEN_TIMEOUT_MS = 300;
 const AUTHORIZED_DEVICE_INFO_REFRESH_INTERVAL_MS = 5 * 60_000;
@@ -112,6 +114,7 @@ export interface UseDs5BridgeResult {
   shouldReturnHome: boolean;
   shouldReturnHomeRef: RefObject<boolean>;
   isConnected: boolean;
+  isRuntimeConfigConnected: boolean;
   isDirty: boolean;
   isDefaultConfig: boolean;
   needsUsbReconnect: boolean;
@@ -257,6 +260,7 @@ export function useDs5Bridge(): UseDs5BridgeResult {
   const ns2ProBlePairingRequestedUntilRef = useRef(0);
   const ns2ProPhysicalPathPresentRef = useRef(false);
   const lastTrayBatteriesSignatureRef = useRef("");
+  const isRuntimeConfigConnected = Boolean(client?.device.opened && isDualSenseRuntimeManagementDevice(client.device));
 
   const issues = useMemo(() => validateConfig(draft), [draft]);
   const isConnected = Boolean(client?.device.opened);
@@ -454,6 +458,11 @@ export function useDs5Bridge(): UseDs5BridgeResult {
       options.preserveReconnectTracking ||
       ns2ProPhysicalPathPresentRef.current ||
       Boolean(ns2ProPairingRef.current.ns2proPath);
+
+    if (mappingAutoSaveTimerRef.current !== null) {
+      window.clearTimeout(mappingAutoSaveTimerRef.current);
+      mappingAutoSaveTimerRef.current = null;
+    }
 
     clientRef.current = null;
     usbEffectiveConfigRef.current = null;
@@ -741,6 +750,13 @@ export function useDs5Bridge(): UseDs5BridgeResult {
           if (!activeClient || getDeviceKey(activeClient.device) !== deviceKey) {
             return;
           }
+          const bridgeActive = isNs2ProPairingReady(ns2ProPairingRef.current) ||
+            Boolean(ns2ProPairingRef.current.running) ||
+            Boolean(ns2ProPairingRef.current.picoPath) ||
+            Boolean(ns2ProPairingRef.current.ns2proPath);
+          if (bridgeActive && hasAnyPicoRuntimeDevice(nextDevices)) {
+            return;
+          }
           if (deviceListIncludes(nextDevices, activeClient.device)) {
             return;
           }
@@ -776,6 +792,7 @@ export function useDs5Bridge(): UseDs5BridgeResult {
   const attachClient = useCallback(
     async (nextClient: Ds5BridgeHidClient) => {
       const isSwitchReconnect = shouldReturnHomeRef.current || Boolean(reconnectingDevicePortKeyRef.current);
+      const supportsRuntimeConfig = isDualSenseRuntimeManagementDevice(nextClient.device);
       setOperation("connecting");
       const previousClient = clientRef.current;
       try {
@@ -795,14 +812,41 @@ export function useDs5Bridge(): UseDs5BridgeResult {
 
       suppressNextConnectSoundRef.current = false;
 
-      try {
-        await readConfigWithClient(nextClient, true);
-        await readButtonMappingsWithClient(nextClient);
-      } catch (cause) {
-        if (!isSwitchReconnect) {
-          throw cause;
+      if (supportsRuntimeConfig) {
+        try {
+          await readConfigWithClient(nextClient, true);
+        } catch (cause) {
+          if (!isSwitchReconnect) {
+            throw cause;
+          }
+          setError(null);
+          setNeedsUsbReconnect(false);
         }
-        setError(null);
+
+        try {
+          await readButtonMappingsWithClient(nextClient);
+        } catch (cause) {
+          if (!isSwitchReconnect) {
+            throw cause;
+          }
+          setError(null);
+        }
+      } else {
+        configRef.current = null;
+        draftRef.current = DEFAULT_CONFIG;
+        setConfig(null);
+        setDraft(DEFAULT_CONFIG);
+        setSaveState("idle");
+        ds5ButtonMappingRef.current = null;
+        ds5ButtonMappingDraftRef.current = DEFAULT_DS5_BUTTON_MAPPING;
+        ns2proButtonMappingRef.current = null;
+        ns2proButtonMappingDraftRef.current = DEFAULT_NS2PRO_BUTTON_MAPPING;
+        setDs5ButtonMapping(null);
+        setDs5ButtonMappingDraft(DEFAULT_DS5_BUTTON_MAPPING);
+        setNs2proButtonMapping(null);
+        setNs2proButtonMappingDraft(DEFAULT_NS2PRO_BUTTON_MAPPING);
+        mappingDirtyRef.current = false;
+        usbEffectiveConfigRef.current = null;
         setNeedsUsbReconnect(false);
       }
 
@@ -896,15 +940,15 @@ export function useDs5Bridge(): UseDs5BridgeResult {
 
   const ensurePicoClient = useCallback(async (): Promise<Ds5BridgeHidClient | null> => {
     const currentClient = clientRef.current;
-    if (currentClient?.device.opened) {
+    if (currentClient?.device.opened && isPicoManagementDevice(currentClient.device)) {
       return currentClient;
     }
 
     try {
-      const nextClient = await Ds5BridgeHidClient.requestDevice();
+      const nextClient = await Ds5BridgeHidClient.requestPicoManagementDevice();
       await attachClient(nextClient);
       await refreshAuthorizedDevices();
-      return clientRef.current?.device.opened ? clientRef.current : nextClient;
+      return clientRef.current?.device.opened && isPicoManagementDevice(clientRef.current.device) ? clientRef.current : nextClient;
     } catch (cause) {
       if (!isNoDeviceSelectedError(cause)) {
         setError(errorMessage(cause, t));
@@ -988,7 +1032,7 @@ export function useDs5Bridge(): UseDs5BridgeResult {
       while (true) {
         mappingApplyQueuedRef.current = false;
         const nextClient = clientRef.current;
-        if (!nextClient) {
+        if (!nextClient || !isDualSenseRuntimeManagementDevice(nextClient.device)) {
           break;
         }
 
@@ -1027,9 +1071,19 @@ export function useDs5Bridge(): UseDs5BridgeResult {
     return true;
   }, [t]);
 
+  const saveButtonMappingsToFlash = useCallback(async () => {
+    const nextClient = clientRef.current;
+    if (!nextClient || !isDualSenseRuntimeManagementDevice(nextClient.device)) {
+      return;
+    }
+
+    await nextClient.saveButtonMappings();
+    setError(null);
+  }, []);
+
   const saveToFlash = useCallback(async () => {
     const nextClient = clientRef.current;
-    if (!nextClient || !configsEqual(configRef.current, draftRef.current)) {
+    if (!nextClient || !isDualSenseRuntimeManagementDevice(nextClient.device) || !configsEqual(configRef.current, draftRef.current)) {
       return;
     }
 
@@ -1075,14 +1129,18 @@ export function useDs5Bridge(): UseDs5BridgeResult {
       mappingAutoSaveTimerRef.current = null;
       const applied = await applyLatestMappings();
       if (applied && !mappingDirtyRef.current) {
-        await saveToFlash();
+        try {
+          await saveButtonMappingsToFlash();
+        } catch (cause) {
+          setError(errorMessage(cause, t));
+        }
       }
     }, 180);
-  }, [applyLatestMappings, saveToFlash]);
+  }, [applyLatestMappings, saveButtonMappingsToFlash, t]);
 
   const readConfig = useCallback(async () => {
     const nextClient = clientRef.current;
-    if (!nextClient) {
+    if (!nextClient || !isDualSenseRuntimeManagementDevice(nextClient.device)) {
       return;
     }
 
@@ -1096,7 +1154,12 @@ export function useDs5Bridge(): UseDs5BridgeResult {
       if (applied && configsEqual(configRef.current, draftRef.current)) {
         await saveToFlash();
       }
+      const mappingsApplied = await applyLatestMappings();
+      if (mappingsApplied && !mappingDirtyRef.current) {
+        await saveButtonMappingsToFlash();
+      }
       await readConfigWithClient(nextClient);
+      await readButtonMappingsWithClient(nextClient);
     } catch (cause) {
       if (clientRef.current === nextClient) {
         scheduleConnectedDeviceDisconnectCheck(nextClient);
@@ -1106,10 +1169,10 @@ export function useDs5Bridge(): UseDs5BridgeResult {
       setError(errorMessage(cause, t));
       setOperation(null);
     }
-  }, [applyLatestDraft, readConfigWithClient, saveToFlash, scheduleConnectedDeviceDisconnectCheck, t]);
+  }, [applyLatestDraft, applyLatestMappings, readButtonMappingsWithClient, readConfigWithClient, saveButtonMappingsToFlash, saveToFlash, scheduleConnectedDeviceDisconnectCheck, t]);
 
   const reconnectUsb = useCallback(async () => {
-    if (!client) {
+    if (!client || !isDualSenseRuntimeManagementDevice(client.device)) {
       return;
     }
 
@@ -1128,7 +1191,7 @@ export function useDs5Bridge(): UseDs5BridgeResult {
 
   const applyPendingUsbReconnect = useCallback(async () => {
     const nextClient = clientRef.current;
-    if (!nextClient) {
+    if (!nextClient || !isDualSenseRuntimeManagementDevice(nextClient.device)) {
       return;
     }
 
@@ -1270,16 +1333,17 @@ export function useDs5Bridge(): UseDs5BridgeResult {
     setOperation("connecting");
     try {
       let currentClient = clientRef.current;
-      const fallbackManagerPath = currentClient?.device.opened
+      const currentClientIsManager = Boolean(currentClient?.device.opened && isPicoManagementDevice(currentClient.device));
+      const fallbackManagerPath = currentClientIsManager
         ? null
         : (await invoke<TauriHidDeviceInfo[]>("ds5_list_devices"))
           .find((device) => device.vendorId === PICO_MANAGER_VENDOR_ID && device.productId === PICO_MANAGER_PRODUCT_ID)?.path ?? null;
 
-      if (!currentClient?.device.opened && !fallbackManagerPath) {
+      if (!currentClientIsManager && !fallbackManagerPath) {
         currentClient = await ensurePicoClient();
       }
 
-      if (!currentClient?.device.opened && !fallbackManagerPath) {
+      if (!(currentClient?.device.opened && isPicoManagementDevice(currentClient.device)) && !fallbackManagerPath) {
         ns2ProBlePairingRequestedUntilRef.current = 0;
         setNs2proBleState("Error");
         setNs2proBleLastError(NS2PRO_BLE_PICO_NOT_CONNECTED_ERROR);
@@ -1292,7 +1356,7 @@ export function useDs5Bridge(): UseDs5BridgeResult {
       ns2ProBlePairingRequestedUntilRef.current = Date.now() + NS2PRO_BLE_MANUAL_PAIRING_HOLD_MS;
       setNs2proBleLastError(0);
 
-      if (currentClient?.device.opened) {
+      if (currentClient?.device.opened && isPicoManagementDevice(currentClient.device)) {
         await currentClient.startNs2ProBlePairing();
         await refreshPicoInfo(
           currentClient,
@@ -1329,7 +1393,7 @@ export function useDs5Bridge(): UseDs5BridgeResult {
 
   const calibrateNs2ProStickCenter = useCallback(async (): Promise<boolean> => {
       const currentClient = clientRef.current;
-      if (!currentClient?.device.opened) {
+      if (!currentClient?.device.opened || !isDualSenseRuntimeManagementDevice(currentClient.device)) {
         setError(t("errors.noDeviceSelected"));
         return false;
       }
@@ -1362,6 +1426,9 @@ export function useDs5Bridge(): UseDs5BridgeResult {
 
   const setDraftField = useCallback(
     <Key extends keyof ConfigBody>(field: Key, value: ConfigBody[Key]) => {
+      if (!clientRef.current?.device || !isDualSenseRuntimeManagementDevice(clientRef.current.device)) {
+        return;
+      }
       const nextDraft = { ...draftRef.current, [field]: value };
       pendingChangedFieldsRef.current.add(field);
       draftRef.current = nextDraft;
@@ -1373,6 +1440,9 @@ export function useDs5Bridge(): UseDs5BridgeResult {
   );
 
   const setDs5ButtonMappingField = useCallback((field: Ds5MappingInput, value: ButtonMappingTarget) => {
+    if (!clientRef.current?.device || !isDualSenseRuntimeManagementDevice(clientRef.current.device)) {
+      return;
+    }
     const nextDraft = { ...ds5ButtonMappingDraftRef.current, [field]: value };
     ds5ButtonMappingDraftRef.current = nextDraft;
     setDs5ButtonMappingDraft(nextDraft);
@@ -1381,6 +1451,9 @@ export function useDs5Bridge(): UseDs5BridgeResult {
   }, [scheduleMappingAutoSave]);
 
   const setNs2ProButtonMappingField = useCallback((field: Ns2ProMappingInput, value: ButtonMappingTarget) => {
+    if (!clientRef.current?.device || !isDualSenseRuntimeManagementDevice(clientRef.current.device)) {
+      return;
+    }
     const nextDraft = { ...ns2proButtonMappingDraftRef.current, [field]: value };
     ns2proButtonMappingDraftRef.current = nextDraft;
     setNs2proButtonMappingDraft(nextDraft);
@@ -1616,9 +1689,15 @@ export function useDs5Bridge(): UseDs5BridgeResult {
               updateLowBatterySoundState(connectedClient.device, nextBatteryText);
             }
           }).catch(() => {
-          if (clientRef.current === connectedClient) {
-            scheduleConnectedDeviceDisconnectCheck(connectedClient);
-          }
+            if (clientRef.current === connectedClient) {
+              const bridgeActive = isNs2ProPairingReady(ns2ProPairingRef.current) ||
+                Boolean(ns2ProPairingRef.current.running) ||
+                Boolean(ns2ProPairingRef.current.picoPath) ||
+                Boolean(ns2ProPairingRef.current.ns2proPath);
+              if (!bridgeActive) {
+                scheduleConnectedDeviceDisconnectCheck(connectedClient);
+              }
+            }
           });
         }
       };
@@ -1693,7 +1772,13 @@ export function useDs5Bridge(): UseDs5BridgeResult {
           signalStrengthRef.current,
         ).catch(() => {
           if (clientRef.current === currentClient) {
-            scheduleConnectedDeviceDisconnectCheck(currentClient);
+            const bridgeActive = isNs2ProPairingReady(ns2ProPairingRef.current) ||
+              Boolean(ns2ProPairingRef.current.running) ||
+              Boolean(ns2ProPairingRef.current.picoPath) ||
+              Boolean(ns2ProPairingRef.current.ns2proPath);
+            if (!bridgeActive) {
+              scheduleConnectedDeviceDisconnectCheck(currentClient);
+            }
           }
         });
       }
@@ -1800,6 +1885,7 @@ export function useDs5Bridge(): UseDs5BridgeResult {
     shouldReturnHome,
     shouldReturnHomeRef,
     isConnected,
+    isRuntimeConfigConnected,
     isDirty,
     isDefaultConfig,
     needsUsbReconnect,
@@ -2267,6 +2353,13 @@ function normalizeNs2ProWaitingReason(
 
 function isNs2ProPairingReady(status: Ns2ProPairingStatus): boolean {
   return status.phase === "paired" || status.waitingReason === "forwarding";
+}
+
+function hasAnyPicoRuntimeDevice(devices: HIDDevice[]): boolean {
+  return devices.some((device) =>
+    (device.vendorId === PICO_MANAGER_VENDOR_ID && device.productId === PICO_MANAGER_PRODUCT_ID) ||
+    (device.vendorId !== PICO_MANAGER_VENDOR_ID && Ds5BridgeHidClient.isSupportedDevice(device)),
+  );
 }
 
 function operationLabel(operation: Exclude<Operation, null>, t: (key: string) => string): string {

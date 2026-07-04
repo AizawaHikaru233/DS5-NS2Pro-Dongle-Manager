@@ -312,6 +312,7 @@ export function ButtonMappingPanel({ bridge, source }: ButtonMappingPanelProps) 
   const { t } = useTranslation();
   const [openKey, setOpenKey] = useState<string | null>(null);
   const isDs5 = source === "DS5";
+  const editable = bridge.isRuntimeConfigConnected && bridge.operation === null;
   const mapping = isDs5 ? bridge.ds5ButtonMappingDraft : bridge.ns2proButtonMappingDraft;
   const rawInputs = isDs5 ? DS5_MAPPING_INPUTS : NS2PRO_MAPPING_INPUTS;
 
@@ -381,15 +382,23 @@ export function ButtonMappingPanel({ bridge, source }: ButtonMappingPanelProps) 
                         <MappingPicker
                           inputLabel={sourceLabel}
                           value={target}
-                          open={openKey === pickerKey}
+                          open={editable && openKey === pickerKey}
                           options={visibleTargetOptions}
                           optionLabel={(value) => t(`mapping.targets.${value}`)}
                           forceUpward={forceUpward}
                           forceCentered={forceCentered}
                           alignLeftward={isRightmostInRow}
-                          onToggle={() => setOpenKey((current) => current === pickerKey ? null : pickerKey)}
+                          onToggle={() => {
+                            if (!editable) {
+                              return;
+                            }
+                            setOpenKey((current) => current === pickerKey ? null : pickerKey);
+                          }}
                           onDismiss={() => setOpenKey(null)}
                           onChange={(nextTarget) => {
+                            if (!editable) {
+                              return;
+                            }
                             setOpenKey(null);
                             if (isDs5) {
                               bridge.setDs5ButtonMappingField(inputKey as Ds5MappingInput, nextTarget);

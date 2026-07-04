@@ -179,7 +179,17 @@ export class Ds5BridgeHidClient {
 
   static async requestDevice(): Promise<Ds5BridgeHidClient> {
     const devices = await Ds5BridgeHidClient.authorizedDevices();
-    const device = devices.find(isPicoManagerDevice) ?? devices[0];
+    const device = devices[0];
+    if (!device) {
+      throw new Error(NO_DEVICE_SELECTED_ERROR);
+    }
+
+    return new Ds5BridgeHidClient(device);
+  }
+
+  static async requestPicoManagementDevice(): Promise<Ds5BridgeHidClient> {
+    const devices = await Ds5BridgeHidClient.authorizedDevices();
+    const device = devices.find(isPicoManagerDevice);
     if (!device) {
       throw new Error(NO_DEVICE_SELECTED_ERROR);
     }
@@ -259,6 +269,11 @@ export class Ds5BridgeHidClient {
     const report = commandReport(CMD_UPDATE_NS2PRO_BUTTON_MAPPING);
     report.set(encodeNs2ProButtonMapping(mapping), 1);
     await this.tauriDevice.sendFeatureReport(REPORT_SET_CONFIG, report);
+  }
+
+  async saveButtonMappings(): Promise<void> {
+    await this.open();
+    await this.tauriDevice.sendFeatureReport(REPORT_SET_CONFIG, commandReport(CMD_SAVE_BUTTON_MAPPING));
   }
 
   async readFirmwareVersion(): Promise<string> {
@@ -350,7 +365,7 @@ export class Ds5BridgeHidClient {
   async saveToFlash(): Promise<void> {
     await this.open();
     await this.tauriDevice.sendFeatureReport(REPORT_SET_CONFIG, commandReport(CMD_SAVE_TO_FLASH));
-    await this.tauriDevice.sendFeatureReport(REPORT_SET_CONFIG, commandReport(CMD_SAVE_BUTTON_MAPPING));
+    await this.saveButtonMappings();
   }
 
   async reconnectUsb(): Promise<void> {
@@ -396,7 +411,7 @@ export function tauriDeviceInfosToHidDevices(devices: TauriHidDeviceInfo[]): HID
 }
 
 export function isAutoConnectCandidate(device: HIDDevice): boolean {
-  return Ds5BridgeHidClient.isSupportedDevice(device);
+  return isDualSenseRuntimeDevice(device);
 }
 
 export function isPicoManagementDevice(device: HIDDevice): boolean {
@@ -404,7 +419,15 @@ export function isPicoManagementDevice(device: HIDDevice): boolean {
     return false;
   }
 
-  return isPicoManagerDevice(device) || isDualSenseRuntimeDevice(device);
+  return isPicoManagerDevice(device);
+}
+
+export function isDualSenseRuntimeManagementDevice(device: HIDDevice): boolean {
+  if (!Ds5BridgeHidClient.isSupportedDevice(device)) {
+    return false;
+  }
+
+  return isDualSenseRuntimeDevice(device);
 }
 
 export function webHidAvailable(): boolean {

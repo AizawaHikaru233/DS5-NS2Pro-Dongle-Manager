@@ -276,8 +276,8 @@ export default function App() {
           needsUsbReconnect={bridge.needsUsbReconnect}
           showBackButton={isSettingsView}
           onBack={handleBackHome}
-          showDeviceActions={isSettingsView && Boolean(bridge.client)}
-          canUseDeviceActions={Boolean(bridge.client)}
+          showDeviceActions={isSettingsView && bridge.isRuntimeConfigConnected}
+          canUseDeviceActions={bridge.isRuntimeConfigConnected}
           canResetToDefaults={!bridge.isDefaultConfig}
           isBusy={isBusy}
           onReadConfig={bridge.readConfig}

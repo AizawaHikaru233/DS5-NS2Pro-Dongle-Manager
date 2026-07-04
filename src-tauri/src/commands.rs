@@ -689,10 +689,10 @@ fn spawn_ns2pro_pico_bridge_thread(
             bridge_stats.running = false;
             if ns2pro_manual_pairing_active(&manual_pairing_until) {
                 if let Ok(api) = HidApi::new() {
-                bridge_stats.pico_path = find_first_supported_pico_path(&api);
-                bridge_stats.ns2pro_path = find_first_ns2pro_input_path(&api);
-                bridge_stats.ns2pro_output_path =
-                    find_first_ns2pro_output_path(&api, bridge_stats.ns2pro_path.as_deref());
+                    bridge_stats.pico_path = find_first_supported_pico_path(&api);
+                    bridge_stats.ns2pro_path = find_first_ns2pro_input_path(&api);
+                    bridge_stats.ns2pro_output_path =
+                        find_first_ns2pro_output_path(&api, bridge_stats.ns2pro_path.as_deref());
                 } else {
                     bridge_stats.pico_path = None;
                     bridge_stats.ns2pro_path = None;
@@ -953,6 +953,7 @@ fn run_ns2pro_pico_bridge_loop(
     ns2pro_path: Option<String>,
     read_timeout_ms: i32,
 ) -> Result<(), String> {
+    let manual_pairing_limited = manual_pairing_deadline.is_some();
     let mut pico_input = PicoInputTransport::Disabled;
     set_pico_input_transport_stats(stats, &pico_input, None);
 
@@ -984,6 +985,13 @@ fn run_ns2pro_pico_bridge_loop(
                 bridge_stats.waiting_reason = Some("inputForwardFailed".to_string());
                 bridge_stats.last_error = Some(error.clone());
             });
+            if !manual_pairing_limited {
+                update_ns2pro_pico_bridge_stats(stats, |bridge_stats| {
+                    bridge_stats.pico_path = None;
+                    bridge_stats.waiting_reason = None;
+                });
+                return Ok(());
+            }
         }
     }
 
@@ -1029,7 +1037,7 @@ fn run_ns2pro_pico_bridge_loop(
             return Ok(());
         }
 
-        if !manual_pairing_expired {
+        if manual_pairing_limited && !manual_pairing_expired {
             reopen_serial_transport_if_needed(
                 &mut pico_input,
                 stats,
@@ -1146,14 +1154,11 @@ fn run_ns2pro_pico_bridge_loop(
                         });
                         continue;
                     }
+                    idle_reads = 0;
                     update_ns2pro_pico_bridge_stats(stats, |bridge_stats| {
-                        bridge_stats.waiting_reason = Some("inputReceiveFailed".to_string());
-                        bridge_stats.last_error = Some(
-                            "No NS2Pro input reports were received for too long; restarting NS2Pro bridge."
-                                .to_string(),
-                        );
+                        bridge_stats.waiting_reason = Some("forwarding".to_string());
+                        bridge_stats.last_error = None;
                     });
-                    return Err("No NS2Pro input reports were received for too long; restarting NS2Pro bridge.".to_string());
                 }
                 continue;
             }
@@ -1215,7 +1220,7 @@ fn run_ns2pro_pico_bridge_loop(
                 let payload = &latest_payload[..latest_payload_len];
 
                 if pico_input.is_disabled() {
-                    if !manual_pairing_expired {
+                    if manual_pairing_limited && !manual_pairing_expired {
                         reopen_serial_transport_if_needed(
                             &mut pico_input,
                             stats,
@@ -1226,7 +1231,7 @@ fn run_ns2pro_pico_bridge_loop(
                 }
 
                 if pico_input.is_disabled() {
-                    if manual_pairing_expired {
+                    if manual_pairing_expired || !manual_pairing_limited {
                         update_ns2pro_pico_bridge_stats(stats, |bridge_stats| {
                             bridge_stats.pico_path = None;
                             bridge_stats.waiting_reason = None;
@@ -1276,6 +1281,14 @@ fn run_ns2pro_pico_bridge_loop(
                             set_pico_input_transport_stats(stats, &pico_input, Some(message.clone()));
                             consecutive_serial_write_errors = 0;
                             next_serial_reopen_at = Instant::now() + Duration::from_millis(NS2PRO_SERIAL_REOPEN_RETRY_MS);
+                            if !manual_pairing_limited {
+                                update_ns2pro_pico_bridge_stats(stats, |bridge_stats| {
+                                    bridge_stats.pico_path = None;
+                                    bridge_stats.waiting_reason = None;
+                                    bridge_stats.last_error = None;
+                                });
+                                return Ok(());
+                            }
                             continue;
                         }
 
@@ -1317,7 +1330,7 @@ fn run_ns2pro_pico_bridge_loop(
                     bridge_stats.last_error = Some(message.clone());
                 });
                 if consecutive_read_errors >= NS2PRO_MAX_CONSECUTIVE_READ_ERRORS {
-                        if let Some(next_path) = current_ns2pro_input_path(&current_ns2pro_path) {
+                    if let Some(next_path) = current_ns2pro_input_path(&current_ns2pro_path) {
                         if let Ok((next_api, next_device)) = open_ns2pro_input_device(&next_path) {
                             _ns2pro_input_api_guard = next_api;
                             ns2pro = next_device;
@@ -1340,8 +1353,23 @@ fn run_ns2pro_pico_bridge_loop(
                             continue;
                         }
                     }
+
+                    let device_still_present = HidApi::new()
+                        .ok()
+                        .map(|api| ns2pro_input_path_exists(&api, &current_ns2pro_path))
+                        .unwrap_or(false);
+                    if device_still_present {
+                        consecutive_read_errors = 0;
+                        update_ns2pro_pico_bridge_stats(stats, |bridge_stats| {
+                            bridge_stats.waiting_reason = Some("forwarding".to_string());
+                            bridge_stats.last_error = None;
+                        });
+                        thread::sleep(Duration::from_millis(25));
+                        continue;
+                    }
+
                     return Err(format!(
-                        "NS2Pro HID read failed {consecutive_read_errors} times in a row; restarting NS2Pro bridge. Last error: {message}"
+                        "NS2Pro HID read failed {consecutive_read_errors} times in a row and the device path disappeared; restarting NS2Pro bridge. Last error: {message}"
                     ));
                 }
                 thread::sleep(Duration::from_millis(10));

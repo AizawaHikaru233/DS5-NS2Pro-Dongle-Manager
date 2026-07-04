@@ -11,6 +11,7 @@ interface FloatControlProps {
   min: number;
   max: number;
   step: number;
+  disabled?: boolean;
   displayScale?: number;
   displayOffset?: number;
   displayMin?: number;
@@ -30,6 +31,7 @@ export function FloatControl({
   min,
   max,
   step,
+  disabled = false,
   displayScale = 1,
   displayOffset = 0,
   displayMin,
@@ -84,6 +86,9 @@ export function FloatControl({
   };
 
   const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
+    if (disabled) {
+      return;
+    }
     const next = Number(event.currentTarget.value);
     setInputText(event.currentTarget.value);
     if (Number.isFinite(next)) {
@@ -93,6 +98,9 @@ export function FloatControl({
   };
 
   const handleSliderChange = ([next]: number[]) => {
+    if (disabled) {
+      return;
+    }
     if (Number.isFinite(next)) {
       setLocalValue(next);
       setInputText(next.toFixed(fractionDigits));
@@ -100,7 +108,7 @@ export function FloatControl({
   };
 
   return (
-    <label className={`control-row ${issue ? "invalid" : ""}`}>
+    <label className={`control-row ${issue ? "invalid" : ""} ${disabled ? "is-disabled" : ""}`}>
       <span>
         <strong>{label}</strong>
         {description && <em>{description}</em>}
@@ -112,6 +120,7 @@ export function FloatControl({
           max={displayMax ?? toDisplay(max)}
           step={displayStep ?? step * displayScale}
           value={[localValue]}
+          disabled={disabled}
           onValueChange={handleSliderChange}
           onValueCommit={([next]) => Number.isFinite(next) && commitChange(next, true)}
         />
@@ -121,6 +130,7 @@ export function FloatControl({
           max={displayMax ?? toDisplay(max)}
           step={displayStep ?? step * displayScale}
           value={inputText}
+          disabled={disabled}
           onChange={handleChange}
           aria-invalid={Boolean(issue)}
           className="font-bold"

@@ -4,10 +4,11 @@ import { POLLING_RATE_OPTIONS, PollingRateMode } from "../../protocol/config";
 
 interface PollingRateControlProps {
   value: PollingRateMode;
+  disabled?: boolean;
   onChange: (value: PollingRateMode) => void;
 }
 
-export function PollingRateControl({ value, onChange }: PollingRateControlProps) {
+export function PollingRateControl({ value, disabled = false, onChange }: PollingRateControlProps) {
   const { t } = useTranslation();
   const optionLabels: Record<PollingRateMode, string> = {
     0: t("config.pollingRate.hz250"),
@@ -16,16 +17,20 @@ export function PollingRateControl({ value, onChange }: PollingRateControlProps)
   };
 
   return (
-    <div className="control-row control-row-plain">
+    <div className={`control-row control-row-plain ${disabled ? "is-disabled" : ""}`}>
       <strong>{t("config.pollingRateMode")}</strong>
       <Tabs
         value={String(value)}
-        onValueChange={(next) => onChange(Number(next) as PollingRateMode)}
+        onValueChange={(next) => {
+          if (!disabled) {
+            onChange(Number(next) as PollingRateMode);
+          }
+        }}
         className="w-full"
       >
         <TabsList className="grid h-10 w-full grid-cols-3">
           {POLLING_RATE_OPTIONS.map((option) => (
-            <TabsTrigger key={option.value} value={String(option.value)} className="h-8 text-sm font-bold">
+            <TabsTrigger key={option.value} value={String(option.value)} disabled={disabled} className="h-8 text-sm font-bold">
               {optionLabels[option.value]}
             </TabsTrigger>
           ))}

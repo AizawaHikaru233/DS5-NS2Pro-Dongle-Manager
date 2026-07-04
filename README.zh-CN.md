@@ -41,8 +41,7 @@
 
 ```powershell
 pnpm install
-pnpm build
-pnpm tauri build --bundles msi
+pnpm build:msi
 ```
 
 MSI 输出目录：

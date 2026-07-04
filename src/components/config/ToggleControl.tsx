@@ -5,21 +5,27 @@ interface ToggleControlProps {
   label: string;
   description?: string;
   value: boolean;
+  disabled?: boolean;
   onChange: (value: boolean) => void;
 }
 
-export function ToggleControl({ label, description, value, onChange }: ToggleControlProps) {
+export function ToggleControl({ label, description, value, disabled = false, onChange }: ToggleControlProps) {
   const { t } = useTranslation();
 
   return (
-    <div className="control-row toggle-row">
+    <div className={`control-row toggle-row ${disabled ? "is-disabled" : ""}`}>
       <span>
         <strong>{label}</strong>
         {description ? <small>{description}</small> : null}
       </span>
       <Switch
         checked={value}
-        onCheckedChange={onChange}
+        disabled={disabled}
+        onCheckedChange={(next) => {
+          if (!disabled) {
+            onChange(next);
+          }
+        }}
         className="justify-self-end"
         title={value ? t("toggle.enabled") : t("toggle.disabled")}
       />

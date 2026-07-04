@@ -47,6 +47,8 @@ export function ConfigPanel({
   onProgressComplete,
 }: ConfigPanelProps) {
   const { t } = useTranslation();
+  const editable = bridge.isRuntimeConfigConnected;
+  const controlsDisabled = !editable || bridge.operation !== null;
   const [showProgressDialog, setShowProgressDialog] = useState(false);
   const [progressTitle, setProgressTitle] = useState("");
   const [progressDescription, setProgressDescription] = useState("");
@@ -401,7 +403,12 @@ export function ConfigPanel({
                   <em>{t("config.rumbleStyleDescription")}</em>
                   <Tabs
                     value={String(bridge.draft.ns2proRumbleStyle)}
-                    onValueChange={(next) => handleNs2ProRumbleStyleChange(Number(next) as Ns2ProRumbleStyle)}
+                    onValueChange={(next) => {
+                      if (!editable) {
+                        return;
+                      }
+                      handleNs2ProRumbleStyleChange(Number(next) as Ns2ProRumbleStyle);
+                    }}
                     className="w-full"
                   >
                     <TabsList className="grid h-10 w-full grid-cols-2">
@@ -426,6 +433,7 @@ export function ConfigPanel({
                   displayStep={5}
                   fractionDigits={0}
                   issue={fieldIssue(bridge.issues, "ns2proRumbleGain")}
+                  disabled={controlsDisabled}
                   onChange={(value) => bridge.setDraftField("ns2proRumbleGain", value)}
                 />
                 <div className="control-row toggle-row">
@@ -460,6 +468,7 @@ export function ConfigPanel({
                   value={bridge.draft.ns2proLeftStickDeadzonePercent}
                   min={0}
                   max={30}
+                  disabled={controlsDisabled}
                   issue={fieldIssue(bridge.issues, "ns2proLeftStickDeadzonePercent")}
                   onChange={(value) => bridge.setDraftField("ns2proLeftStickDeadzonePercent", value)}
                 />
@@ -469,6 +478,7 @@ export function ConfigPanel({
                   value={bridge.draft.ns2proRightStickDeadzonePercent}
                   min={0}
                   max={30}
+                  disabled={controlsDisabled}
                   issue={fieldIssue(bridge.issues, "ns2proRightStickDeadzonePercent")}
                   onChange={(value) => bridge.setDraftField("ns2proRightStickDeadzonePercent", value)}
                 />
@@ -476,6 +486,7 @@ export function ConfigPanel({
                   label={t("config.ns2proAutoStickCenter")}
                   description={t("config.ns2proAutoStickCenterDescription")}
                   value={bridge.draft.ns2proAutoStickCenter}
+                  disabled={controlsDisabled}
                   onChange={(value) => bridge.setDraftField("ns2proAutoStickCenter", value)}
                 />
                 <div className="control-row control-row-action">
@@ -487,7 +498,7 @@ export function ConfigPanel({
                     type="button"
                     variant="secondary"
                     onClick={() => void handleNs2ProStickCalibration()}
-                    disabled={!bridge.isConnected || bridge.operation !== null || stickCalibrationRunning}
+                    disabled={!bridge.isRuntimeConfigConnected || bridge.operation !== null || stickCalibrationRunning}
                   >
                     {t("config.calibrateNow")}
                   </Button>
@@ -521,6 +532,7 @@ export function ConfigPanel({
                   displayStep={5}
                   fractionDigits={0}
                   issue={fieldIssue(bridge.issues, "ds5HapticsGain")}
+                  disabled={controlsDisabled}
                   onChange={(value) => bridge.setDraftField("ds5HapticsGain", value)}
                 />
                 <FloatControl
@@ -537,6 +549,7 @@ export function ConfigPanel({
                   displayToValue={percentToSpeakerVolume}
                   fractionDigits={0}
                   issue={fieldIssue(bridge.issues, "speakerVolume")}
+                  disabled={controlsDisabled}
                   onChange={(value) => bridge.setDraftField("speakerVolume", value)}
                 />
                 <IntegerControl
@@ -545,6 +558,7 @@ export function ConfigPanel({
                   value={bridge.draft.hapticsBufferLength}
                   min={16}
                   max={128}
+                  disabled={controlsDisabled}
                   issue={fieldIssue(bridge.issues, "hapticsBufferLength")}
                   onChange={(value) => bridge.setDraftField("hapticsBufferLength", value)}
                 />
@@ -567,6 +581,7 @@ export function ConfigPanel({
                   value={bridge.draft.ds5LeftStickDeadzonePercent}
                   min={0}
                   max={30}
+                  disabled={controlsDisabled}
                   issue={fieldIssue(bridge.issues, "ds5LeftStickDeadzonePercent")}
                   onChange={(value) => bridge.setDraftField("ds5LeftStickDeadzonePercent", value)}
                 />
@@ -576,6 +591,7 @@ export function ConfigPanel({
                   value={bridge.draft.ds5RightStickDeadzonePercent}
                   min={0}
                   max={30}
+                  disabled={controlsDisabled}
                   issue={fieldIssue(bridge.issues, "ds5RightStickDeadzonePercent")}
                   onChange={(value) => bridge.setDraftField("ds5RightStickDeadzonePercent", value)}
                 />
@@ -597,6 +613,7 @@ export function ConfigPanel({
               <div className="control-stack compact-stack">
                 <ControllerModeControl
                   value={bridge.draft.controllerMode}
+                  disabled={controlsDisabled}
                   onChange={handleControllerModeChange}
                 />
               </div>
@@ -616,6 +633,7 @@ export function ConfigPanel({
                 <div className="config-tip">{t("config.pollingRateTip")}</div>
                 <PollingRateControl
                   value={bridge.draft.pollingRateMode}
+                  disabled={controlsDisabled}
                   onChange={handlePollingRateChange}
                 />
               </div>
@@ -638,18 +656,20 @@ export function ConfigPanel({
                   value={bridge.draft.inactiveTime}
                   min={5}
                   max={60}
-                  disabled={bridge.draft.disableInactiveDisconnect}
+                  disabled={controlsDisabled || bridge.draft.disableInactiveDisconnect}
                   issue={fieldIssue(bridge.issues, "inactiveTime")}
                   onChange={(value) => bridge.setDraftField("inactiveTime", value)}
                 />
                 <ToggleControl
                   label={t("config.disableInactiveDisconnect")}
                   value={bridge.draft.disableInactiveDisconnect}
+                  disabled={controlsDisabled}
                   onChange={(value) => bridge.setDraftField("disableInactiveDisconnect", value)}
                 />
                 <ToggleControl
                   label={t("config.disablePicoLed")}
                   value={bridge.draft.disablePicoLed}
+                  disabled={controlsDisabled}
                   onChange={(value) => bridge.setDraftField("disablePicoLed", value)}
                 />
               </div>

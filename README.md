@@ -41,8 +41,7 @@ This repository is not a replacement frontend for upstream DS5Dongle. It is a ma
 
 ```powershell
 pnpm install
-pnpm build
-pnpm tauri build --bundles msi
+pnpm build:msi
 ```
 
 The MSI is written to:

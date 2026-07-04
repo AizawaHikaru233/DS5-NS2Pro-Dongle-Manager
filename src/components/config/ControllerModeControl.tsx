@@ -4,10 +4,11 @@ import { CONTROLLER_MODE_OPTIONS, ControllerMode } from "../../protocol/config";
 
 interface ControllerModeControlProps {
   value: ControllerMode;
+  disabled?: boolean;
   onChange: (value: ControllerMode) => void;
 }
 
-export function ControllerModeControl({ value, onChange }: ControllerModeControlProps) {
+export function ControllerModeControl({ value, disabled = false, onChange }: ControllerModeControlProps) {
   const { t } = useTranslation();
   const optionLabels: Record<ControllerMode, string> = {
     0: t("config.controllerModeOptions.ds5"),
@@ -16,17 +17,21 @@ export function ControllerModeControl({ value, onChange }: ControllerModeControl
   };
 
   return (
-    <div className="control-row control-row-plain">
+    <div className={`control-row control-row-plain ${disabled ? "is-disabled" : ""}`}>
       <strong>{t("config.controllerMode")}</strong>
       <em>{t("config.controllerModeDescription")}</em>
       <Tabs
         value={String(value)}
-        onValueChange={(next) => onChange(Number(next) as ControllerMode)}
+        onValueChange={(next) => {
+          if (!disabled) {
+            onChange(Number(next) as ControllerMode);
+          }
+        }}
         className="w-full"
       >
         <TabsList className="grid h-10 w-full grid-cols-3">
           {CONTROLLER_MODE_OPTIONS.map((option) => (
-            <TabsTrigger key={option.value} value={String(option.value)} className="h-8 text-sm font-bold">
+            <TabsTrigger key={option.value} value={String(option.value)} disabled={disabled} className="h-8 text-sm font-bold">
               {optionLabels[option.value]}
             </TabsTrigger>
           ))}
