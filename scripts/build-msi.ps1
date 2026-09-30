@@ -9,6 +9,17 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 $tauriRoot = Join-Path $projectRoot "src-tauri"
 $bundleDir = Join-Path $tauriRoot "target\\release\\bundle\\msi"
 
+# Prefer the repo-local Rust toolchain (.rustup / .cargo inside the checkout)
+# when present, so the app can be built without a machine-wide rustup default
+# toolchain and without writing to the user profile.
+$localCargoHome = Join-Path $projectRoot ".cargo"
+if ((Test-Path -LiteralPath (Join-Path $projectRoot ".rustup")) -and (Test-Path -LiteralPath $localCargoHome)) {
+  $env:RUSTUP_HOME = Join-Path $projectRoot ".rustup"
+  $env:CARGO_HOME = $localCargoHome
+  $env:PATH = "$localCargoHome\bin;$env:PATH"
+  Write-Host "Using repo-local Rust toolchain: $localCargoHome\bin"
+}
+
 if (-not $RenameOnly -and -not $SkipFrontendBuild) {
   & pnpm build
   if ($LASTEXITCODE -ne 0) {

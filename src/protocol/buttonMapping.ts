@@ -153,8 +153,39 @@ function decodeMapping<T extends string>(
   source: ArrayBuffer | DataView | Uint8Array,
   fallback: Record<T, ButtonMappingTarget>,
 ): Record<T, ButtonMappingTarget> {
-  const bytes = toUint8Array(source);
+  const bytes = mappingBytes(toUint8Array(source), inputs.length);
   return Object.fromEntries(inputs.map((key, index) => [key, indexToTarget(bytes[index] ?? BUTTON_MAPPING_TARGET_NONE, fallback[key])])) as Record<T, ButtonMappingTarget>;
+}
+
+/**
+ * Feature report reads include the report ID as the first byte (hidapi), while
+ * the firmware fills the payload without it. Pick whichever alignment holds
+ * nothing but valid targets so a stale ID byte can never shift the mapping.
+ */
+function mappingBytes(bytes: Uint8Array, count: number): Uint8Array {
+  if (bytes.byteLength < count) {
+    return bytes;
+  }
+  if (isValidMappingRange(bytes, 0, count)) {
+    return bytes;
+  }
+  if (bytes.byteLength >= count + 1 && isValidMappingRange(bytes, 1, count)) {
+    return bytes.subarray(1);
+  }
+  return bytes;
+}
+
+function isValidMappingRange(bytes: Uint8Array, offset: number, count: number): boolean {
+  for (let index = 0; index < count; index += 1) {
+    const value = bytes[offset + index];
+    if (value === undefined) {
+      return false;
+    }
+    if (value !== BUTTON_MAPPING_TARGET_NONE && value >= BUTTON_MAPPING_TARGETS.length) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function mappingsEqual<T extends string>(inputs: readonly T[], left: Record<T, ButtonMappingTarget> | null, right: Record<T, ButtonMappingTarget> | null): boolean {

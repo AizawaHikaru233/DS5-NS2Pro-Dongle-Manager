@@ -13,6 +13,9 @@ dist
 dist-ssr
 *.local
 src-tauri/target
+# Repo-local Rust toolchain (rustup home + cargo home installed here)
+.rustup
+.cargo
 src-tauri/motion_capture_*.csv
 src-tauri/src/bin/
 src-tauri/examples/

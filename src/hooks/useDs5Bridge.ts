@@ -66,6 +66,8 @@ const AUTO_CONNECT_RETRY_COOLDOWN_MS = 10_000;
 const NS2PRO_BLE_MANUAL_PAIRING_HOLD_MS = 10_000;
 const NS2PRO_STICK_CALIBRATION_PENDING_ERROR = 0x41;
 const NS2PRO_STICK_CALIBRATION_FAILED_ERROR = 0x42;
+const NS2PRO_GYRO_CALIBRATION_PENDING_ERROR = 0x43;
+const NS2PRO_GYRO_CALIBRATION_FAILED_ERROR = 0x44;
 const NS2PRO_BLE_PAIRING_COMMAND_FAILED_ERROR = 253;
 const NS2PRO_BLE_PICO_NOT_CONNECTED_ERROR = 254;
 const REPORT_SET_CONFIG = 0xf6;
@@ -155,6 +157,7 @@ export interface UseDs5BridgeResult {
   retryNs2ProPairing: () => Promise<void>;
   startNs2ProBlePairing: () => Promise<void>;
   calibrateNs2ProStickCenter: () => Promise<boolean>;
+  calibrateNs2ProGyroCenter: () => Promise<boolean>;
   resetToDefaults: () => Promise<void>;
   clearReturnHome: () => void;
   clearError: () => void;
@@ -1424,6 +1427,41 @@ export function useDs5Bridge(): UseDs5BridgeResult {
       }
     }, [readConfigWithClient, t]);
 
+  const calibrateNs2ProGyroCenter = useCallback(async (): Promise<boolean> => {
+    const currentClient = clientRef.current;
+    if (!currentClient?.device.opened || !isDualSenseRuntimeManagementDevice(currentClient.device)) {
+      setError(t("errors.noDeviceSelected"));
+      return false;
+    }
+
+    try {
+      await currentClient.calibrateNs2ProGyroCenter();
+      // Firmware samples one still window (~32 input frames) and fails after
+      // 1.2 s, so this loop only has to outlast that deadline.
+      let lastStatus = await currentClient.readPicoBridgeStatus();
+      for (let attempt = 0; attempt < 40 && lastStatus.lastError === NS2PRO_GYRO_CALIBRATION_PENDING_ERROR; attempt += 1) {
+        await sleep(60);
+        lastStatus = await currentClient.readPicoBridgeStatus();
+      }
+      if (
+        lastStatus.lastError === NS2PRO_GYRO_CALIBRATION_PENDING_ERROR ||
+        lastStatus.lastError === NS2PRO_GYRO_CALIBRATION_FAILED_ERROR ||
+        lastStatus.lastError !== 0
+      ) {
+        setError(null);
+        return false;
+      }
+      await currentClient.saveToFlash();
+      await readConfigWithClient(currentClient);
+      setSaveState("saved");
+      setError(null);
+      return true;
+    } catch (cause) {
+      setError(errorMessage(cause, t));
+      return false;
+    }
+  }, [readConfigWithClient, t]);
+
   const setDraftField = useCallback(
     <Key extends keyof ConfigBody>(field: Key, value: ConfigBody[Key]) => {
       if (!clientRef.current?.device || !isDualSenseRuntimeManagementDevice(clientRef.current.device)) {
@@ -1926,6 +1964,7 @@ export function useDs5Bridge(): UseDs5BridgeResult {
     retryNs2ProPairing,
     startNs2ProBlePairing,
     calibrateNs2ProStickCenter,
+    calibrateNs2ProGyroCenter,
     resetToDefaults,
     clearReturnHome: () => {
       shouldReturnHomeRef.current = false;

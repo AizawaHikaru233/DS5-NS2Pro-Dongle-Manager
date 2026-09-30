@@ -1,4 +1,4 @@
-﻿.panel-title {
+.panel-title {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -70,6 +70,10 @@
 .config-section-ns2pro-stick {
   grid-column: 2;
   grid-row: 1 / span 2;
+}
+
+.config-section-ns2pro-gyro {
+  grid-column: 1;
 }
 
 .config-section-input-owner {
@@ -338,7 +342,8 @@
 
 @media (width <= 900px) {
   .config-section-ns2pro-rumble,
-  .config-section-ns2pro-stick {
+  .config-section-ns2pro-stick,
+  .config-section-ns2pro-gyro {
     grid-column: 1 / -1;
     grid-row: auto;
   }

@@ -55,6 +55,7 @@ const CMD_SET_INPUT_OWNER = 0x11;
 const CMD_NS2PRO_BLE_START_PAIRING = 0x40;
 const CMD_NS2PRO_BLE_CLEAR_BOND = 0x41;
 const CMD_NS2PRO_CALIBRATE_STICK_CENTER = 0x42;
+const CMD_NS2PRO_CALIBRATE_GYRO_CENTER = 0x43;
 const deviceSessionKeyByPath = new Map<string, string>();
 let nextDeviceSessionId = 1;
 
@@ -248,13 +249,15 @@ export class Ds5BridgeHidClient {
   async readDs5ButtonMapping(): Promise<Ds5ButtonMapping> {
     await this.open();
     const report = await this.tauriDevice.receiveFeatureReport(DS5_MAPPING_REPORT_ID);
-    return decodeDs5ButtonMapping(report);
+    debugFeatureReport("readDs5ButtonMapping receive", DS5_MAPPING_REPORT_ID, report);
+    return decodeDs5ButtonMapping(featureReportPayload(report, DS5_MAPPING_REPORT_ID));
   }
 
   async readNs2ProButtonMapping(): Promise<Ns2ProButtonMapping> {
     await this.open();
     const report = await this.tauriDevice.receiveFeatureReport(NS2PRO_MAPPING_REPORT_ID);
-    return decodeNs2ProButtonMapping(report);
+    debugFeatureReport("readNs2ProButtonMapping receive", NS2PRO_MAPPING_REPORT_ID, report);
+    return decodeNs2ProButtonMapping(featureReportPayload(report, NS2PRO_MAPPING_REPORT_ID));
   }
 
   async applyDs5ButtonMapping(mapping: Ds5ButtonMapping): Promise<void> {
@@ -346,6 +349,11 @@ export class Ds5BridgeHidClient {
   async calibrateNs2ProStickCenter(): Promise<void> {
     await this.open();
     await this.tauriDevice.sendFeatureReport(REPORT_SET_CONFIG, commandReport(CMD_NS2PRO_CALIBRATE_STICK_CENTER));
+  }
+
+  async calibrateNs2ProGyroCenter(): Promise<void> {
+    await this.open();
+    await this.tauriDevice.sendFeatureReport(REPORT_SET_CONFIG, commandReport(CMD_NS2PRO_CALIBRATE_GYRO_CENTER));
   }
 
   async readSignalStrength(): Promise<number | null> {

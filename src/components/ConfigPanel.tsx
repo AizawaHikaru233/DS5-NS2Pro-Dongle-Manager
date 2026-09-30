@@ -39,7 +39,11 @@ interface SoftwareSettingsPayload {
   ns2proAutoDetectEnabled: boolean;
 }
 
-type StickCalibrationResult = "success" | "failure" | null;
+type CalibrationKind = "stick" | "gyro";
+interface CalibrationResult {
+  kind: CalibrationKind;
+  succeeded: boolean;
+}
 
 export function ConfigPanel({
   bridge,
@@ -55,8 +59,8 @@ export function ConfigPanel({
   const [progress, setProgress] = useState(0);
   const [ns2proAutoDetectEnabled, setNs2proAutoDetectEnabled] = useState(false);
   const [usbReconnectDialogOpen, setUsbReconnectDialogOpen] = useState(false);
-  const [stickCalibrationRunning, setStickCalibrationRunning] = useState(false);
-  const [stickCalibrationResult, setStickCalibrationResult] = useState<StickCalibrationResult>(null);
+  const [calibrationRunning, setCalibrationRunning] = useState<CalibrationKind | null>(null);
+  const [calibrationResult, setCalibrationResult] = useState<CalibrationResult | null>(null);
 
   const progressValueRef = useRef(0);
   const progressFrameRef = useRef<number | null>(null);
@@ -332,28 +336,33 @@ export function ConfigPanel({
     }
   };
 
-  const handleNs2ProStickCalibration = useCallback(async () => {
-    if (stickCalibrationRunning) {
+  const handleNs2ProCalibration = useCallback(async (kind: CalibrationKind) => {
+    if (calibrationRunning) {
       return;
     }
 
     const runId = switchRunIdRef.current + 1;
     switchRunIdRef.current = runId;
     finishingRef.current = false;
-    setStickCalibrationRunning(true);
-    setStickCalibrationResult(null);
+    setCalibrationRunning(kind);
+    setCalibrationResult(null);
     clearManagedTimeouts();
     stopProgressAnimation();
 
     flushSync(() => {
-      setProgressTitle(t("config.calibratingStickCenter"));
-      setProgressDescription(t("config.calibratingStickCenterDescription"));
+      setProgressTitle(kind === "gyro" ? t("config.calibratingGyroCenter") : t("config.calibratingStickCenter"));
+      setProgressDescription(
+        kind === "gyro" ? t("config.calibratingGyroCenterDescription") : t("config.calibratingStickCenterDescription"),
+      );
       setProgressValue(0);
       setShowProgressDialog(true);
     });
 
-    const progressTask = animateProgressTo(90, 1400, runId);
-    const succeeded = await bridge.calibrateNs2ProStickCenter();
+    const progressTask = animateProgressTo(90, kind === "gyro" ? 1300 : 1400, runId);
+    const succeeded =
+      kind === "gyro"
+        ? await bridge.calibrateNs2ProGyroCenter()
+        : await bridge.calibrateNs2ProStickCenter();
 
     if (switchRunIdRef.current !== runId) {
       return;
@@ -369,15 +378,15 @@ export function ConfigPanel({
     await delay(250);
     setShowProgressDialog(false);
     setProgressValue(0);
-    setStickCalibrationRunning(false);
-    setStickCalibrationResult(succeeded ? "success" : "failure");
+    setCalibrationRunning(null);
+    setCalibrationResult({ kind, succeeded });
   }, [
     animateProgressTo,
     bridge,
+    calibrationRunning,
     clearManagedTimeouts,
     delay,
     setProgressValue,
-    stickCalibrationRunning,
     stopProgressAnimation,
     t,
   ]);
@@ -497,8 +506,35 @@ export function ConfigPanel({
                   <Button
                     type="button"
                     variant="secondary"
-                    onClick={() => void handleNs2ProStickCalibration()}
-                    disabled={!bridge.isRuntimeConfigConnected || bridge.operation !== null || stickCalibrationRunning}
+                    onClick={() => void handleNs2ProCalibration("stick")}
+                    disabled={!bridge.isRuntimeConfigConnected || bridge.operation !== null || calibrationRunning !== null}
+                  >
+                    {t("config.calibrateNow")}
+                  </Button>
+                </div>
+              </div>
+            </section>
+            <section className="config-section config-section-ns2pro-gyro">
+              <div className="config-section-heading">
+                <span className="config-section-icon">
+                  <Gauge size={17} />
+                </span>
+                <div>
+                  <h3>{t("config.sections.ns2proGyro")}</h3>
+                  <p>{t("config.sections.ns2proGyroDescription")}</p>
+                </div>
+              </div>
+              <div className="control-stack">
+                <div className="control-row control-row-action">
+                  <span>
+                    <strong>{t("config.ns2proCalibrateGyroCenter")}</strong>
+                    <small>{t("config.ns2proCalibrateGyroCenterDescription")}</small>
+                  </span>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => void handleNs2ProCalibration("gyro")}
+                    disabled={!bridge.isRuntimeConfigConnected || bridge.operation !== null || calibrationRunning !== null}
                   >
                     {t("config.calibrateNow")}
                   </Button>
@@ -683,22 +719,30 @@ export function ConfigPanel({
         description={progressDescription}
         progress={progress}
       />
-      <Dialog open={stickCalibrationResult !== null} onOpenChange={(open) => !open && setStickCalibrationResult(null)}>
+      <Dialog open={calibrationResult !== null} onOpenChange={(open) => !open && setCalibrationResult(null)}>
         <DialogContent className="sm:max-w-md" data-no-drag>
           <DialogHeader>
             <DialogTitle>
-              {stickCalibrationResult === "success"
-                ? t("config.stickCalibrationSucceededTitle")
-                : t("config.stickCalibrationFailedTitle")}
+              {calibrationResult?.kind === "gyro"
+                ? calibrationResult.succeeded
+                  ? t("config.gyroCalibrationSucceededTitle")
+                  : t("config.gyroCalibrationFailedTitle")
+                : calibrationResult?.succeeded
+                  ? t("config.stickCalibrationSucceededTitle")
+                  : t("config.stickCalibrationFailedTitle")}
             </DialogTitle>
             <DialogDescription>
-              {stickCalibrationResult === "success"
-                ? t("config.stickCalibrationSucceededDescription")
-                : t("config.stickCalibrationFailedDescription")}
+              {calibrationResult?.kind === "gyro"
+                ? calibrationResult.succeeded
+                  ? t("config.gyroCalibrationSucceededDescription")
+                  : t("config.gyroCalibrationFailedDescription")
+                : calibrationResult?.succeeded
+                  ? t("config.stickCalibrationSucceededDescription")
+                  : t("config.stickCalibrationFailedDescription")}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button type="button" onClick={() => setStickCalibrationResult(null)}>
+            <Button type="button" onClick={() => setCalibrationResult(null)}>
               {t("config.stickCalibrationResultOk")}
             </Button>
           </DialogFooter>
